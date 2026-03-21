@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>GOLDCAT</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
 
 <script type="module">
@@ -61,15 +62,65 @@ const LEVELS = [
 
 // ── GENERATE UNIQUE USER CODE ──
 function generateUserCode() {
-  // 6-digit random number: e.g. #482910
   return Math.floor(100000 + Math.random() * 900000);
 }
+
+// ── TON CONNECT ──
+let tonConnectUI = null;
+let connectedWallet = null;
+
+function initTonConnect() {
+  try {
+    tonConnectUI = new TONConnectUI.TonConnectUI({
+      manifestUrl: 'https://adel66638.github.io/goldcat/tonconnect-manifest.json',
+      buttonRootId: null,
+    });
+    tonConnectUI.onStatusChange(async (wallet) => {
+      connectedWallet = wallet;
+      if (wallet) {
+        const addr = wallet.account.address;
+        // Save wallet address to Firebase
+        const userRef = doc(db,'users',userId);
+        await updateDoc(userRef, { walletAddress: addr });
+        state.walletAddress = addr;
+        renderWalletBtn();
+        showToast('✅ Wallet connected!','ton-toast');
+      } else {
+        state.walletAddress = null;
+        renderWalletBtn();
+      }
+    });
+  } catch(e) { console.error('TON Connect init error:', e); }
+}
+
+function renderWalletBtn() {
+  const btn = document.getElementById('connect-wallet-btn');
+  const addr = state.walletAddress;
+  if (!btn) return;
+  if (addr) {
+    btn.textContent = '💎 ' + addr.slice(0,6) + '…' + addr.slice(-4);
+    btn.classList.add('connected');
+  } else {
+    btn.textContent = '🔗 Connect TON Wallet';
+    btn.classList.remove('connected');
+  }
+}
+
+window.connectWallet = async function() {
+  if (!tonConnectUI) return;
+  if (connectedWallet) {
+    await tonConnectUI.disconnect();
+    showToast('Wallet disconnected');
+  } else {
+    await tonConnectUI.openModal();
+  }
+};
 
 // ── STATE ──
 let state = {
   level:1, balance:0, totalRefs:0, todayRefs:0, rank:0,
   miningActive:false, miningStartTime:null, minedPending:0,
-  userCode: null,
+  userCode: null, walletAddress: null,
   friends:[], leaderboard:[], pendingBuyLevel:null,
 };
 let miningTimer = null;
@@ -103,6 +154,7 @@ async function loadUser(){
       state.miningStartTime = d.miningStartTime?.toMillis?.() || d.miningStartTime || null;
       state.minedTotal   = d.minedTotal   || 0;
       state.userCode     = d.userCode     || null;
+      state.walletAddress = d.walletAddress || null;
       // assign code if old user doesn't have one yet
       if(!state.userCode){
         state.userCode = generateUserCode();
@@ -118,7 +170,9 @@ async function loadUser(){
     await loadLeaderboard();
     await loadRank();
     renderAll();
+    renderWalletBtn();
     if(state.miningActive) startMiningCountdown();
+    initTonConnect();
   } catch(e){
     console.error(e);
     showToast('❌ Connection error','error');
@@ -655,6 +709,21 @@ header{position:relative;z-index:10;padding:18px 20px 0;display:flex;align-items
 .withdraw-btn{width:100%;border:none;border-radius:16px;padding:15px;font-family:'Inter',sans-serif;font-size:15px;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;background:linear-gradient(135deg,var(--ton),var(--ton2));color:#fff;box-shadow:0 6px 24px rgba(0,136,204,.3);margin-bottom:14px;transition:all .2s;}
 .withdraw-btn svg{width:20px;height:20px;}
 
+.connect-wallet-btn{
+  width:100%;border:none;border-radius:16px;padding:14px;
+  font-family:'Inter',sans-serif;font-size:14px;font-weight:700;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;
+  background:var(--card2);border:1px solid rgba(0,136,204,.3);
+  color:var(--ton3);margin-bottom:14px;transition:all .2s;
+}
+.connect-wallet-btn:active{transform:scale(.97);}
+.connect-wallet-btn.connected{
+  background:rgba(0,136,204,.12);
+  border-color:rgba(0,136,204,.5);
+  color:var(--ton3);
+  font-size:12px;
+}
+
 .mining-locked{background:var(--card);border:1px solid var(--border);border-radius:24px;padding:28px 20px;text-align:center;margin:0 16px;}
 .lock-icon{font-size:60px;margin-bottom:14px;}
 .lock-title{font-size:20px;font-weight:900;margin-bottom:8px;}
@@ -911,6 +980,9 @@ header{position:relative;z-index:10;padding:18px 20px 0;display:flex;align-items
       <svg viewBox="0 0 56 56" fill="none"><circle cx="28" cy="28" r="28" fill="#fff" fill-opacity=".15"/><path d="M35.238 15H20.762C17.905 15 16.1 18.108 17.56 20.56L26.944 36.968C27.468 37.872 28.532 37.872 29.056 36.968L38.44 20.56C39.9 18.108 38.095 15 35.238 15Z" fill="white"/></svg>
       Withdraw via TON
       <span style="font-size:11px;opacity:.7;font-weight:600;">Min: 0.5 TON</span>
+    </button>
+    <button class="connect-wallet-btn" id="connect-wallet-btn" onclick="connectWallet()">
+      🔗 Connect TON Wallet
     </button>
   </div>
 
