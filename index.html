@@ -969,6 +969,71 @@ header{position:relative;z-index:10;padding:18px 20px 0;display:flex;align-items
     <div class="hmw-arrow">→</div>
   </div>
 
+  <!-- ══ PROMO BANNER ══ -->
+  <div class="promo-banner" onclick="shareLink()" style="
+    margin: 0 0 14px 0;
+    background: linear-gradient(135deg, #1a1200 0%, #0d1120 50%, #0a1a10 100%);
+    border: 1px solid rgba(240,180,41,0.35);
+    border-radius: 18px;
+    padding: 16px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 0 24px rgba(240,180,41,0.08);
+    animation: promoPulse 3s ease-in-out infinite;
+  ">
+    <!-- glow effect -->
+    <div style="
+      position:absolute; top:-30px; left:-20px;
+      width:120px; height:120px;
+      background: radial-gradient(circle, rgba(240,180,41,0.15), transparent 70%);
+      pointer-events:none;
+    "></div>
+
+    <!-- icon -->
+    <div style="
+      font-size: 36px;
+      filter: drop-shadow(0 0 10px rgba(240,180,41,0.8));
+      flex-shrink:0;
+      animation: catBounce 2s ease-in-out infinite;
+    ">🐱</div>
+
+    <!-- text -->
+    <div style="flex:1; min-width:0;">
+      <div style="
+        font-size: 13px; font-weight: 900; color: #f0b429;
+        margin-bottom: 3px; letter-spacing: 0.3px;
+      ">🚀 شارك GOLDCAT واربح أكثر!</div>
+      <div style="
+        font-size: 11px; color: rgba(255,255,255,0.55); line-height: 1.5;
+      ">ادعُ أصدقاءك واحصل على <span style="color:#ffd700;font-weight:700;">TON حقيقي</span> مقابل كل إحالة</div>
+    </div>
+
+    <!-- arrow badge -->
+    <div style="
+      background: linear-gradient(135deg, #f0b429, #ff8c00);
+      border-radius: 50%;
+      width: 34px; height: 34px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px; flex-shrink:0;
+      box-shadow: 0 0 14px rgba(240,180,41,0.5);
+    ">📤</div>
+  </div>
+
+  <style>
+    @keyframes promoPulse {
+      0%,100% { border-color: rgba(240,180,41,0.25); box-shadow: 0 0 16px rgba(240,180,41,0.06); }
+      50%      { border-color: rgba(240,180,41,0.55); box-shadow: 0 0 28px rgba(240,180,41,0.18); }
+    }
+    @keyframes catBounce {
+      0%,100% { transform: translateY(0); }
+      50%      { transform: translateY(-4px); }
+    }
+  </style>
+
   <div class="section">
     <button class="withdraw-btn" onclick="openWithdraw()">
       <svg viewBox="0 0 56 56" fill="none"><circle cx="28" cy="28" r="28" fill="#fff" fill-opacity=".15"/><path d="M35.238 15H20.762C17.905 15 16.1 18.108 17.56 20.56L26.944 36.968C27.468 37.872 28.532 37.872 29.056 36.968L38.44 20.56C39.9 18.108 38.095 15 35.238 15Z" fill="white"/></svg>
