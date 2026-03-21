@@ -970,7 +970,7 @@ header{position:relative;z-index:10;padding:18px 20px 0;display:flex;align-items
   </div>
 
   <!-- ══ PROMO BANNER ══ -->
-  <div class="promo-banner" onclick="shareLink()" style="
+  <div class="promo-banner" onclick="openInfoModal()" style="
     margin: 0 0 14px 0;
     background: linear-gradient(135deg, #1a1200 0%, #0d1120 50%, #0a1a10 100%);
     border: 1px solid rgba(240,180,41,0.35);
@@ -1285,6 +1285,105 @@ header{position:relative;z-index:10;padding:18px 20px 0;display:flex;align-items
     <div class="check-circle" id="check-circle">✓</div>
   </div>
 </div>
+
+<!-- ══ INFO MODAL ══ -->
+<div class="modal-overlay" id="info-modal" onclick="closeModalOutside(event,'info-modal')" style="z-index:9999;">
+  <div class="modal" style="max-height:88vh;overflow-y:auto;padding-bottom:28px;">
+    <div class="modal-handle"></div>
+
+    <!-- Header -->
+    <div style="text-align:center;padding:10px 0 18px;">
+      <div style="font-size:52px;filter:drop-shadow(0 0 16px rgba(240,180,41,0.8));animation:catBounce 2s ease-in-out infinite;">🐱</div>
+      <div style="font-family:'Orbitron',monospace;font-size:26px;font-weight:900;background:linear-gradient(135deg,#ffd700,#f0b429,#ff9500);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:2px;margin:8px 0 4px;">GOLDCAT</div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.5);">دليل استخدام التطبيق</div>
+    </div>
+
+    <div style="height:1px;background:linear-gradient(90deg,transparent,rgba(240,180,41,0.4),transparent);margin:0 0 20px;"></div>
+
+    <!-- Step 1 -->
+    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(240,180,41,0.12);border-radius:16px;padding:16px 18px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <div style="background:linear-gradient(135deg,#f0b429,#ff8c00);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#000;font-size:14px;flex-shrink:0;">1</div>
+        <div style="font-size:15px;font-weight:700;color:#fff;">سجّل وابدأ مجاناً 🎉</div>
+      </div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.55);line-height:1.7;padding-right:44px;">
+        افتح التطبيق عبر تيليغرام وسيُنشأ حسابك تلقائياً. لا تحتاج لأي تسجيل أو كلمة مرور.
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(240,180,41,0.12);border-radius:16px;padding:16px 18px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <div style="background:linear-gradient(135deg,#f0b429,#ff8c00);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#000;font-size:14px;flex-shrink:0;">2</div>
+        <div style="font-size:15px;font-weight:700;color:#fff;">ادعُ أصدقاءك 👥</div>
+      </div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.55);line-height:1.7;padding-right:44px;">
+        شارك رابط الإحالة الخاص بك. عند انضمام كل صديق تحصل على مكافأة <span style="color:#f0b429;font-weight:700;">TON فورية</span> تُضاف لرصيدك مباشرة.
+        <br><br>
+        🎯 <span style="color:#fff;font-weight:600;">5 إحالات = تفعيل التعدين مجاناً!</span>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(240,180,41,0.12);border-radius:16px;padding:16px 18px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <div style="background:linear-gradient(135deg,#f0b429,#ff8c00);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#000;font-size:14px;flex-shrink:0;">3</div>
+        <div style="font-size:15px;font-weight:700;color:#fff;">التعدين التلقائي ⛏️</div>
+      </div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.55);line-height:1.7;padding-right:44px;">
+        بعد 5 إحالات يبدأ التعدين تلقائياً <span style="color:#f0b429;font-weight:700;">24 ساعة / 7 أيام</span> حتى وأنت نائم أو الهاتف مغلق. اجمع المكافآت يومياً بضغطة واحدة.
+      </div>
+    </div>
+
+    <!-- Step 4 -->
+    <div style="background:rgba(255,255,255,0.03);border:1px solid rgba(240,180,41,0.12);border-radius:16px;padding:16px 18px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <div style="background:linear-gradient(135deg,#f0b429,#ff8c00);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#000;font-size:14px;flex-shrink:0;">4</div>
+        <div style="font-size:15px;font-weight:700;color:#fff;">ارقَ في المستويات 🚀</div>
+      </div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.55);line-height:1.7;padding-right:44px;">
+        كلما ارتقيت في المستويات، زادت مكافأتك لكل إحالة وزاد معدل التعدين اليومي:
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:12px;padding-right:44px;">
+        <div style="text-align:center;"><div style="font-size:20px;">⚪</div><div style="font-size:10px;color:rgba(255,255,255,0.4);">0.05 TON</div></div>
+        <div style="text-align:center;"><div style="font-size:20px;">🥉</div><div style="font-size:10px;color:rgba(255,255,255,0.4);">0.10 TON</div></div>
+        <div style="text-align:center;"><div style="font-size:20px;">🥈</div><div style="font-size:10px;color:rgba(255,255,255,0.4);">0.15 TON</div></div>
+        <div style="text-align:center;"><div style="font-size:20px;">🥇</div><div style="font-size:10px;color:rgba(255,255,255,0.4);">0.20 TON</div></div>
+        <div style="text-align:center;"><div style="font-size:20px;">💎</div><div style="font-size:10px;color:rgba(255,255,255,0.4);">0.25 TON</div></div>
+      </div>
+    </div>
+
+    <!-- Step 5 -->
+    <div style="background:rgba(0,136,204,0.08);border:1px solid rgba(0,136,204,0.25);border-radius:16px;padding:16px 18px;margin-bottom:20px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
+        <div style="background:linear-gradient(135deg,#0088CC,#00aaf0);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:900;color:#fff;font-size:14px;flex-shrink:0;">5</div>
+        <div style="font-size:15px;font-weight:700;color:#fff;">اسحب أرباحك 💎</div>
+      </div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.55);line-height:1.7;padding-right:44px;">
+        اربط محفظة TON الخاصة بك واسحب أرباحك الحقيقية متى شئت. الحد الأدنى للسحب <span style="color:#0af;font-weight:700;">0.5 TON</span> فقط.
+      </div>
+    </div>
+
+    <!-- CTA Button -->
+    <button onclick="document.getElementById('info-modal').classList.remove('open'); shareLink();" style="
+      width:100%;
+      background:linear-gradient(135deg,#f0b429,#ff8c00);
+      color:#000; font-weight:900; font-size:16px;
+      border:none; border-radius:50px; padding:16px;
+      cursor:pointer;
+      box-shadow:0 0 24px rgba(240,180,41,0.4);
+      font-family:'Cairo',sans-serif;
+      letter-spacing:0.3px;
+    ">📤 شارك الآن واربح TON</button>
+
+  </div>
+</div>
+
+<script>
+window.openInfoModal = function() {
+  document.getElementById('info-modal').classList.add('open');
+};
+</script>
 
 </body>
 </html>
