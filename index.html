@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>GOLDCAT</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, orderBy, limit, getDocs, increment, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAsNRuN09FLendzP60yBaiw7hV3Toex0D0",
+  authDomain: "tonminer-87923.firebaseapp.com",
+  databaseURL: "https://tonminer-87923-default-rtdb.firebaseio.com",
+  projectId: "tonminer-87923",
+  storageBucket: "tonminer-87923.firebasestorage.app",
+  messagingSenderId: "736875130208",
+  appId: "1:736875130208:web:5741503e947609f09bc205",
+  measurementId: "G-X6K4Q5TPFS"
+};
+
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+
+// ── TELEGRAM ──
+const tg = window.Telegram?.WebApp;
+if(tg){ tg.ready(); tg.expand(); tg.setHeaderColor('#080c14'); tg.setBackgroundColor('#080c14'); }
+const tgUser     = tg?.initDataUnsafe?.user;
+const userId     = String(tgUser?.id || 'demo_' + Math.floor(Math.random()*999999));
+const userName   = tgUser?.first_name || 'مستخدم';
+const startParam = tg?.initDataUnsafe?.start_param || '';
+
+// ── CONSTANTS ──
+const WALLET       = 'UQBufh6lLHE5H1NDJXQwRIVCX-t4iKHyyoXD0Spm8N9navPx';
+const MIN_WITHDRAW = 0.5;
+const MINING_REFS  = 5;          // عدد الإحالات لفتح التعدين
+const MINING_RATE  = 0.1;        // TON كل 24 ساعة
+const MINING_MS    = 86400000;   // 24 ساعة بالمللي ثانية
+const LEVELS = [
+  { id:1, name:'مبتدئ',  icon:'⚪', iconClass:'ico-lv1', badgeClass:'lv1-badge', price:0, reward:0.05, color:'#94a3b8' },
+  { id:2, name:'برونزي', icon:'🥉', iconClass:'ico-lv2', badgeClass:'lv2-badge', price:1, reward:0.10, color:'#cd7f32' },
+  { id:3, name:'فضي',    icon:'🥈', iconClass:'ico-lv3', badgeClass:'lv3-badge', price:2, reward:0.15, color:'#c0c0c0' },
+  { id:4, name:'ذهبي',   icon:'🥇', iconClass:'ico-lv4', badgeClass:'lv4-badge', price:3, reward:0.20, color:'#f0b429' },
+  { id:5, name:'ماسي',   icon:'💎', iconClass:'ico-lv5', badgeClass:'lv5-badge', price:4, reward:0.25, color:'#60a5fa' },
+];
+
+// ── STATE ──
+let state = {
+  level:1, balance:0, totalRefs:0, todayRefs:0, rank:0,
+  miningActive:false, miningStartTime:null, minedPending:0,
+  friends:[], leaderboard:[], pendingBuyLevel:null,
+};
+let miningTimer = null;
+
+// ── LOAD USER ──
+async function loadUser(){
+  showLoader(true);
+  try {
+    const userRef  = doc(db,'users',userId);
+    const userSnap = await getDoc(userRef);
+
+    if(!userSnap.exists()){
+      const newUser = {
+        userId, name:userName, level:1, balance:0,
+        totalRefs:0, todayRefs:0,
+        miningActive:false, miningStartTime:null, minedTotal:0,
+        referredBy: startParam||null,
+        createdAt: serverTimestamp(),
+      };
+      await setDoc(userRef, newUser);
+      if(startParam && startParam!==userId) await registerReferral(startParam);
+      Object.assign(state, newUser);
+    } else {
+      const d = userSnap.data();
+      state.level        = d.level        || 1;
+      state.balance      = d.balance      || 0;
+      state.totalRefs    = d.totalRefs    || 0;
+      state.todayRefs    = d.todayRefs    || 0;
+      state.miningActive = d.miningActive || false;
+      state.miningStartTime = d.miningStartTime?.toMillis?.() || d.miningStartTime || null;
+      state.minedTotal   = d.minedTotal   || 0;
+    }
+
+    // احسب المكافأة المتراكمة من التعدين
+    if(state.miningActive && state.miningStartTime){
+      await claimMinedTON();
+    }
+
+    await loadFriends();
+    await loadLeaderboard();
+    await loadRank();
+    renderAll();
+    if(state.miningActive) startMiningCountdown();
+  } catch(e){
+    console.error(e);
+    showToast('❌ خطأ في الاتصال','error');
+  }
+  showLoader(false);
+}
+
+// ── MINING: احسب وأضف ما تراكم ──
+async function claimMinedTON(){
+  if(!state.miningActive || !state.miningStartTime) return;
+  const now      = Date.now();
+  const elapsed  = now - state.miningStartTime;
+  const earned   = parseFloat(((elapsed / MINING_MS) * MINING_RATE).toFixed(6));
+  if(earned <= 0) return;
+
+  // أضف للرصيد وأعد ضبط وقت البداية
+  const userRef = doc(db,'users',userId);
+  await updateDoc(userRef, {
+    balance: increment(earned),
+    miningStartTime: now,
+    minedTotal: increment(earned),
+  });
+  state.balance      = parseFloat((state.balance + earned).toFixed(6));
+  state.miningStartTime = now;
+  state.minedTotal   = (state.minedTotal||0) + earned;
+}
+
+// ── MINING: ابدأ العداد المرئي ──
+function startMiningCountdown(){
+  if(miningTimer) clearInterval(miningTimer);
+  updateMiningUI();
+  miningTimer = setInterval(updateMiningUI, 1000);
+}
+
+function updateMiningUI(){
+  if(!state.miningActive || !state.miningStartTime) return;
+  const elapsed = Date.now() - state.miningStartTime;
+  const pending = parseFloat(((elapsed / MINING_MS) * MINING_RATE).toFixed(6));
+  const remaining = MINING_MS - (elapsed % MINING_MS);
+  const h = Math.floor(remaining/3600000);
+  const m = Math.floor((remaining%3600000)/60000);
+  const s = Math.floor((remaining%60000)/1000);
+  const timeStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+
+  setEl('mining-pending',  pending.toFixed(6)+' TON');
+  setEl('mining-countdown', timeStr);
+  setEl('mining-rate-info', `${MINING_RATE} TON / 24 ساعة`);
+
+  // نسبة الدورة الحالية
+  const pct = ((elapsed % MINING_MS) / MINING_MS) * 100;
+  const fill = document.getElementById('mining-ring-fill');
+  if(fill){
+    const circumference = 2 * Math.PI * 45;
+    fill.style.strokeDashoffset = circumference - (pct/100)*circumference;
+  }
+}
+
+// ── ACTIVATE MINING ──
+async function activateMining(){
+  if(state.totalRefs < MINING_REFS){
+    showToast(`⚠️ تحتاج ${MINING_REFS} إحالات لفتح التعدين`,'error');
+    return;
+  }
+  if(state.miningActive){
+    showToast('⛏️ التعدين يعمل بالفعل!','ton-toast');
+    return;
+  }
+  try {
+    const now = Date.now();
+    const userRef = doc(db,'users',userId);
+    await updateDoc(userRef,{ miningActive:true, miningStartTime:now });
+    state.miningActive    = true;
+    state.miningStartTime = now;
+    renderMiningPage();
+    startMiningCountdown();
+    showToast('⛏️ بدأ التعدين! يعمل 24/7','ton-toast');
+  } catch(e){ showToast('❌ فشل تفعيل التعدين','error'); }
+}
+
+// ── COLLECT MINED ──
+async function collectMined(){
+  await claimMinedTON();
+  renderHome();
+  renderMiningPage();
+  showToast('✅ تم إضافة المكافأة لرصيدك!');
+}
+
+// ── REGISTER REFERRAL ──
+async function registerReferral(referrerId){
+  try {
+    const referrerRef  = doc(db,'users',referrerId);
+    const referrerSnap = await getDoc(referrerRef);
+    if(!referrerSnap.exists()) return;
+    const rd   = referrerSnap.data();
+    const lv   = LEVELS.find(l=>l.id===(rd.level||1));
+    const reward = lv.reward;
+    const newRefs = (rd.totalRefs||0) + 1;
+
+    await updateDoc(referrerRef,{
+      balance:   increment(reward),
+      totalRefs: increment(1),
+      todayRefs: increment(1),
+      // فعّل التعدين تلقائياً إذا وصل 5 إحالات
+      ...(newRefs >= MINING_REFS && !rd.miningActive ? {
+        miningActive: true,
+        miningStartTime: Date.now()
+      } : {})
+    });
+
+    const refDoc = doc(db,'referrals',referrerId,'list',userId);
+    await setDoc(refDoc,{ name:userName, userId, earn:reward, date:serverTimestamp() });
+  } catch(e){ console.error('Referral error:',e); }
+}
+
+// ── LOAD FRIENDS ──
+async function loadFriends(){
+  try {
+    const q = query(collection(db,'referrals',userId,'list'), orderBy('date','desc'), limit(20));
+    const snap = await getDocs(q);
+    state.friends = snap.docs.map(d=>d.data());
+  } catch(e){ state.friends=[]; }
+}
+
+// ── LOAD LEADERBOARD ──
+async function loadLeaderboard(){
+  try {
+    const q = query(collection(db,'users'), orderBy('totalRefs','desc'), limit(10));
+    const snap = await getDocs(q);
+    state.leaderboard = snap.docs.map(d=>{
+      const data=d.data();
+      return { name:data.name||'مجهول', initials:(data.name||'م').charAt(0), refs:data.totalRefs||0, score:data.balance||0, isMe:d.id===userId };
+    });
+  } catch(e){ state.leaderboard=[]; }
+}
+
+// ── LOAD RANK ──
+async function loadRank(){
+  try {
+    const q = query(collection(db,'users'),orderBy('totalRefs','desc'));
+    const snap = await getDocs(q);
+    const idx = snap.docs.findIndex(d=>d.id===userId);
+    state.rank = idx>=0 ? idx+1 : 0;
+  } catch(e){ state.rank=0; }
+}
+
+// ── WITHDRAW ──
+async function submitWithdraw(amount){
+  const userRef = doc(db,'users',userId);
+  await updateDoc(userRef,{ balance:increment(-amount) });
+  const wRef = doc(collection(db,'withdrawals'));
+  await setDoc(wRef,{ userId, name:userName, amount, wallet:WALLET, status:'pending', createdAt:serverTimestamp() });
+  state.balance = parseFloat((state.balance-amount).toFixed(6));
+}
+
+// ── BUY LEVEL ──
+async function submitBuyLevel(lvId){
+  const lv = LEVELS.find(l=>l.id===lvId);
+  const userRef = doc(db,'users',userId);
+  await updateDoc(userRef,{ level:lvId });
+  const pRef = doc(collection(db,'purchases'));
+  await setDoc(pRef,{ userId, name:userName, level:lvId, price:lv.price, wallet:WALLET, status:'pending', createdAt:serverTimestamp() });
+  state.level = lvId;
+}
+
+// ── RENDER ──
+function getLv(id){ return LEVELS.find(l=>l.id===id)||LEVELS[0]; }
+function renderAll(){ renderHome(); renderMiningPage(); renderLevels(); renderFriends(); renderLeaderboard(); }
+
+function renderHome(){
+  const lv = getLv(state.level);
+  setEl('total-ton',   state.balance.toFixed(4));
+  setEl('hdr-ton',     state.balance.toFixed(4));
+  setEl('h-refs',      state.totalRefs);
+  setEl('h-today',     state.todayRefs);
+  setEl('h-rank',      state.rank?'#'+state.rank:'#—');
+  setEl('s-refs',      state.totalRefs);
+  setEl('s-earned',    state.balance.toFixed(4));
+  setEl('s-rank',      state.rank?'#'+state.rank:'#—');
+  setEl('s-level',     state.level);
+  setEl('h-reward',    lv.reward.toFixed(2)+' TON');
+  setEl('w-balance',   state.balance.toFixed(4));
+  setEl('ref-link-text',`https://t.me/GOLDCATBot/app?startapp=${userId}`);
+  const badge = document.getElementById('hero-badge');
+  if(badge){ badge.className='level-badge '+lv.badgeClass; badge.textContent=lv.icon+' المستوى '+lv.id+' — '+lv.name; }
+
+  // mini mining widget on home
+  const mw = document.getElementById('home-mining-widget');
+  if(mw){
+    if(state.miningActive){
+      mw.style.display='flex';
+    } else if(state.totalRefs >= MINING_REFS){
+      mw.style.display='flex';
+    } else {
+      mw.style.display='none';
+    }
+  }
+}
+
+function renderMiningPage(){
+  const unlocked = state.totalRefs >= MINING_REFS;
+  const locked   = document.getElementById('mining-locked');
+  const active   = document.getElementById('mining-active');
+  const refsLeft = MINING_REFS - state.totalRefs;
+
+  if(!unlocked){
+    if(locked) locked.style.display='block';
+    if(active) active.style.display='none';
+    setEl('refs-needed', refsLeft);
+    // progress bar
+    const pct = (state.totalRefs/MINING_REFS)*100;
+    const pb = document.getElementById('refs-progress-fill');
+    if(pb) pb.style.width=pct+'%';
+    setEl('refs-progress-label', `${state.totalRefs} / ${MINING_REFS}`);
+  } else {
+    if(locked) locked.style.display='none';
+    if(active) active.style.display='block';
+
+    if(!state.miningActive){
+      const startBtn = document.getElementById('start-mining-btn');
+      if(startBtn) startBtn.style.display='flex';
+      const collectBtn = document.getElementById('collect-mining-btn');
+      if(collectBtn) collectBtn.style.display='none';
+      setEl('mining-status-text','جاهز للتشغيل');
+    } else {
+      const startBtn = document.getElementById('start-mining-btn');
+      if(startBtn) startBtn.style.display='none';
+      const collectBtn = document.getElementById('collect-mining-btn');
+      if(collectBtn) collectBtn.style.display='flex';
+      setEl('mining-status-text','يعمل الآن ⚡');
+    }
+    setEl('mining-rate-info', `${MINING_RATE} TON / 24 ساعة`);
+    setEl('mining-total', (state.minedTotal||0).toFixed(4)+' TON');
+  }
+}
+
+function renderLevels(){
+  const html = LEVELS.map(lv=>{
+    const isCurrent=lv.id===state.level, isOwned=lv.id<state.level;
+    let btn = isCurrent
+      ?`<button class="level-btn btn-active">✓ مستواك الحالي</button>`
+      : isOwned
+        ?`<button class="level-btn btn-active">✓ مكتسب</button>`
+        :`<button class="level-btn btn-buy" onclick="openBuyLevel(${lv.id})">🚀 ترقية لهذا المستوى</button>`;
+    return `
+    <div class="level-card ${isCurrent?'current-level':''}">
+      ${isCurrent?'<div class="current-tag">✓ مستواك الحالي</div>':''}
+      <div class="level-card-top">
+        <div class="level-icon ${lv.iconClass}">${lv.icon}</div>
+        <div class="level-meta">
+          <div class="level-name" style="color:${lv.color}">المستوى ${lv.id} — ${lv.name}</div>
+          <div class="level-sub">${lv.reward.toFixed(2)} TON لكل إحالة</div>
+        </div>
+        <div class="level-price-tag">
+          ${lv.price===0?'<div class="price-free">مجاني</div>':`<div class="price-ton">${lv.price} TON</div>`}
+          <div class="price-lbl">${lv.price===0?'افتراضي':'سعر الترقية'}</div>
+        </div>
+      </div>
+      <div class="level-perks">
+        <div class="perk-chip">💰 <span class="pv">${lv.reward.toFixed(2)} TON</span>/إحالة</div>
+        <div class="perk-chip">📈 × ${lv.id}</div>
+        ${lv.id>=3?'<div class="perk-chip">⚡ أولوية سحب</div>':''}
+        ${lv.id>=4?'<div class="perk-chip">🎁 مكافأة شهرية</div>':''}
+        ${lv.id>=5?'<div class="perk-chip">👑 VIP</div>':''}
+      </div>
+      ${btn}
+    </div>`;
+  }).join('');
+  const el=document.getElementById('levels-list');
+  if(el) el.innerHTML=html;
+}
+
+function renderFriends(){
+  const el=document.getElementById('friends-list');
+  if(!el) return;
+  if(!state.friends.length){
+    el.innerHTML='<div class="empty-state"><div class="big">🐱</div><div>لم تُحل أي صديق بعد</div><div style="margin-top:6px;font-size:11px;">5 إحالات تفتح التعدين!</div></div>';
+    return;
+  }
+  el.innerHTML=state.friends.map(f=>`
+    <div class="friend-item">
+      <div class="friend-avatar">${(f.name||'م').charAt(0)}</div>
+      <div class="friend-info"><div class="friend-name">${f.name||'مستخدم'}</div><div class="friend-date">${formatDate(f.date)}</div></div>
+      <div class="friend-earn">+${(f.earn||0).toFixed(2)} TON</div>
+    </div>`).join('');
+}
+
+function renderLeaderboard(){
+  const el=document.getElementById('leaderboard-list');
+  if(!el) return;
+  if(!state.leaderboard.length){
+    el.innerHTML='<div class="empty-state"><div class="big">📊</div><div>لا يوجد متصدرون بعد</div></div>';
+    return;
+  }
+  const medals=['🥇','🥈','🥉'],tops=['top1','top2','top3'];
+  el.innerHTML=state.leaderboard.map((u,i)=>`
+    <div class="lb-item ${tops[i]||''} ${u.isMe?'my-row':''}">
+      <div class="lb-rank">${medals[i]||(i+1)}</div>
+      <div class="lb-avatar">${u.initials}</div>
+      <div class="lb-info">
+        <div class="lb-name">${u.name} ${u.isMe?'<span style="font-size:9px;color:var(--green);background:rgba(0,217,126,.1);padding:2px 6px;border-radius:10px;">أنت</span>':''}</div>
+        <div class="lb-refs">${u.refs} إحالة</div>
+      </div>
+      <div class="lb-score">${u.score.toFixed(3)} TON</div>
+    </div>`).join('');
+}
+
+function formatDate(ts){
+  if(!ts) return '';
+  try{
+    const d=ts.toDate?ts.toDate():new Date(ts);
+    const diff=Math.floor((Date.now()-d)/1000);
+    if(diff<60) return 'الآن';
+    if(diff<3600) return `منذ ${Math.floor(diff/60)} دقيقة`;
+    if(diff<86400) return `منذ ${Math.floor(diff/3600)} ساعة`;
+    return `منذ ${Math.floor(diff/86400)} يوم`;
+  }catch{ return ''; }
+}
+
+function setEl(id,val){ const el=document.getElementById(id); if(el) el.textContent=val; }
+function showLoader(show){ const el=document.getElementById('loader'); if(el) el.style.display=show?'flex':'none'; }
+
+// ── WINDOW ACTIONS ──
+window.switchPage = function(name,btn){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  btn.classList.add('active');
+  window.scrollTo(0,0);
+};
+
+window.copyLink = function(){
+  const link=`https://t.me/GOLDCATBot/app?startapp=${userId}`;
+  navigator.clipboard.writeText(link).then(()=>{
+    showToast('✅ تم نسخ الرابط!');
+    const btn=document.getElementById('copy-btn');
+    btn.textContent='تم ✓'; btn.classList.add('copied');
+    setTimeout(()=>{btn.textContent='نسخ';btn.classList.remove('copied');},2000);
+  }).catch(()=>showToast('❌ فشل النسخ','error'));
+};
+window.shareLink = function(){
+  const link=`https://t.me/GOLDCATBot/app?startapp=${userId}`;
+  const text=`🐱 انضم إلى GOLDCAT واكسب TON!\n⛏️ 5 إحالات تفتح التعدين!\n\n${link}`;
+  if(tg?.switchInlineQuery) tg.switchInlineQuery(text);
+  else if(navigator.share) navigator.share({title:'GOLDCAT',text,url:link});
+  else window.copyLink();
+};
+window.inviteTG = function(){
+  const link=`https://t.me/GOLDCATBot/app?startapp=${userId}`;
+  const url=`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent('🐱 انضم GOLDCAT! 5 إحالات = تعدين مجاني!')}`;
+  if(tg?.openTelegramLink) tg.openTelegramLink(url);
+  else window.open(url,'_blank');
+};
+
+window.openWithdraw = function(){
+  document.getElementById('ton-amount').value='';
+  document.getElementById('ton-preview').textContent='0.0000';
+  document.getElementById('w-balance').textContent=state.balance.toFixed(4);
+  document.getElementById('confirm-withdraw-btn').disabled=true;
+  document.getElementById('ton-amount').classList.remove('invalid');
+  document.getElementById('withdraw-modal').classList.add('open');
+};
+window.closeModalOutside = function(e,id){ if(e.target===document.getElementById(id)) document.getElementById(id).classList.remove('open'); };
+window.closeModal = function(id){ document.getElementById(id).classList.remove('open'); };
+window.validateWithdraw = function(){
+  const val=parseFloat(document.getElementById('ton-amount').value)||0;
+  document.getElementById('ton-preview').textContent=val.toFixed(4);
+  const valid=val>=MIN_WITHDRAW&&val<=state.balance;
+  document.getElementById('confirm-withdraw-btn').disabled=!valid;
+  document.getElementById('ton-amount').classList.toggle('invalid',val>0&&!valid);
+};
+window.setMaxTon = function(){
+  document.getElementById('ton-amount').value=state.balance.toFixed(4);
+  window.validateWithdraw();
+};
+window.confirmWithdraw = async function(){
+  const val=parseFloat(document.getElementById('ton-amount').value)||0;
+  if(val<MIN_WITHDRAW){showToast('⚠️ الحد الأدنى 0.5 TON','error');return;}
+  if(val>state.balance){showToast('❌ رصيد غير كافٍ','error');return;}
+  window.closeModal('withdraw-modal');
+  startTonAnim(val.toFixed(4),'سحب',async()=>{
+    try{ await submitWithdraw(val); renderHome(); showToast(`🔵 طلب سحب ${val.toFixed(3)} TON بنجاح`,'ton-toast'); }
+    catch(e){ showToast('❌ فشل طلب السحب','error'); }
+  });
+};
+
+window.openBuyLevel = function(lvId){
+  const lv=getLv(lvId); state.pendingBuyLevel=lvId;
+  const iconEl=document.getElementById('bm-icon');
+  iconEl.className='buy-modal-icon '+lv.iconClass; iconEl.textContent=lv.icon;
+  setEl('bm-name','المستوى '+lv.id+' — '+lv.name);
+  setEl('bm-price',lv.price+' TON');
+  document.getElementById('bm-perks').innerHTML=`
+    <div class="buy-perk-row"><span>💰 مكافأة الإحالة</span><span class="buy-perk-val">${lv.reward.toFixed(2)} TON/إحالة</span></div>
+    <div class="buy-perk-row"><span>📈 مضاعف</span><span class="buy-perk-val">× ${lv.id}</span></div>
+    ${lv.id>=3?'<div class="buy-perk-row"><span>⚡ أولوية سحب</span><span class="buy-perk-val">✓</span></div>':''}
+    ${lv.id>=4?'<div class="buy-perk-row"><span>🎁 مكافأة شهرية</span><span class="buy-perk-val">✓</span></div>':''}
+    ${lv.id>=5?'<div class="buy-perk-row"><span>👑 VIP</span><span class="buy-perk-val">✓</span></div>':''}
+  `;
+  document.getElementById('buy-modal').classList.add('open');
+};
+window.confirmBuyLevel = async function(){
+  const lvId=state.pendingBuyLevel; const lv=getLv(lvId);
+  window.closeModal('buy-modal');
+  startTonAnim(lv.price+'.0000','ترقية المستوى',async()=>{
+    try{ await submitBuyLevel(lvId); renderAll(); showToast('🎉 تمت الترقية إلى '+lv.name+'!','ton-toast'); }
+    catch(e){ showToast('❌ فشل الشراء','error'); }
+  });
+};
+
+window.activateMining  = activateMining;
+window.collectMined    = collectMined;
+
+function startTonAnim(amount,label,onDone){
+  const overlay=document.getElementById('ton-anim');
+  document.getElementById('anim-title').textContent='جارٍ '+label+'...';
+  document.getElementById('anim-amount').textContent=amount+' TON';
+  const stepEl=document.getElementById('anim-step'); stepEl.textContent='جارٍ التحقق...';
+  const checkEl=document.getElementById('check-circle'); checkEl.style.display='none';
+  const bar=document.querySelector('.anim-bar-fill'); const nb=bar.cloneNode(true); bar.parentNode.replaceChild(nb,bar);
+  document.querySelectorAll('.orbit-coin').forEach(c=>{const n=c.cloneNode(true);c.parentNode.replaceChild(n,c);});
+  const logo=document.querySelector('.ton-big-logo'); const nl=logo.cloneNode(true); logo.parentNode.replaceChild(nl,logo);
+  overlay.classList.add('show');
+  [{t:700,msg:'التحقق من الشبكة...'},{t:1400,msg:'بث المعاملة...'},{t:2200,msg:'تأكيد الكتلة...'},{t:3000,msg:'✅ تمت بنجاح!'}]
+    .forEach(s=>setTimeout(()=>stepEl.textContent=s.msg,s.t));
+  setTimeout(async()=>{
+    checkEl.style.display='flex'; checkEl.style.animation='none';
+    setTimeout(()=>checkEl.style.animation='popIn .5s forwards',30);
+    if(onDone) await onDone();
+    setTimeout(()=>overlay.classList.remove('show'),2000);
+  },4000);
+}
+
+function showToast(msg,type='success'){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.className='toast '+type; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),3000);
+}
+window.showToast=showToast;
+
+(function(){
+  const w=document.getElementById('particles');
+  for(let i=0;i<20;i++){
+    const p=document.createElement('div'); p.className='particle';
+    const s=Math.random()*4+2;
+    p.style.cssText=`width:${s}px;height:${s}px;left:${Math.random()*100}%;animation-duration:${Math.random()*12+8}s;animation-delay:${Math.random()*10}s;`;
+    w.appendChild(p);
+  }
+})();
+
+loadUser();
+</script>
+
+<style>
+:root{
+  --bg:#080c14;--card:#0f1623;--card2:#161f30;
+  --gold:#f0b429;--gold2:#ffd700;--gold3:#b8860b;--gold4:#ffe066;
+  --ton:#0088cc;--ton2:#006aaa;--ton3:#33aaee;
+  --green:#00d97e;--red:#ff4d6d;--text:#f1f5f9;--muted:#64748b;
+  --border:rgba(240,180,41,0.12);
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+body{font-family:'Cairo',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden;padding-bottom:90px;}
+
+#loader{position:fixed;inset:0;z-index:2000;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;}
+.loader-coin{width:70px;height:70px;animation:coinFloat 1.2s ease-in-out infinite;}
+@keyframes coinFloat{0%,100%{transform:translateY(0);}50%{transform:translateY(-12px);}}
+.loader-text{font-size:14px;color:var(--muted);}
+.loader-dots span{animation:dotBlink 1.2s infinite;}
+.loader-dots span:nth-child(2){animation-delay:.2s;}
+.loader-dots span:nth-child(3){animation-delay:.4s;}
+@keyframes dotBlink{0%,80%,100%{opacity:.2;}40%{opacity:1;}}
+
+#particles{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden;}
+.particle{position:absolute;border-radius:50%;background:var(--gold);opacity:0;animation:floatUp linear infinite;}
+@keyframes floatUp{0%{transform:translateY(110vh) scale(0);opacity:0;}10%{opacity:.5;}90%{opacity:.2;}100%{transform:translateY(-10vh) scale(1);opacity:0;}}
+
+header{position:relative;z-index:10;padding:18px 20px 0;display:flex;align-items:center;justify-content:space-between;}
+.logo{display:flex;align-items:center;gap:10px;}
+.coin-logo{width:48px;height:48px;animation:coinSpin 6s ease-in-out infinite;filter:drop-shadow(0 0 10px rgba(240,180,41,.5));}
+@keyframes coinSpin{0%,100%{transform:rotateY(0);}50%{transform:rotateY(18deg);}}
+.logo-text .brand{font-size:22px;font-weight:900;background:linear-gradient(135deg,var(--gold4),var(--gold),var(--gold3));-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:2px;display:block;}
+.logo-text .tagline{font-size:10px;color:var(--muted);letter-spacing:1px;display:block;}
+.header-balance{background:linear-gradient(135deg,rgba(0,136,204,.18),rgba(0,136,204,.06));border:1px solid rgba(0,136,204,.3);border-radius:12px;padding:8px 14px;display:flex;align-items:center;gap:6px;cursor:pointer;}
+.header-balance span{font-size:16px;font-weight:700;color:var(--ton3);}
+.header-balance small{font-size:10px;color:var(--muted);}
+
+.hero{position:relative;z-index:10;margin:18px 16px;background:linear-gradient(135deg,#1a1200,#0f1623,#001a2a);border:1px solid rgba(240,180,41,.2);border-radius:24px;padding:22px 20px;overflow:hidden;}
+.hero::before{content:'';position:absolute;top:-60px;right:-60px;width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,rgba(240,180,41,.12) 0%,transparent 70%);}
+.hero-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;}
+.hero-label{font-size:11px;color:var(--muted);margin-bottom:4px;}
+.hero-amount{font-size:34px;font-weight:900;color:var(--ton3);line-height:1;}
+.hero-amount small{font-size:14px;font-weight:600;color:var(--ton);}
+.big-coin{width:76px;height:76px;animation:coinFloat 3s ease-in-out infinite;filter:drop-shadow(0 0 15px rgba(240,180,41,.5));}
+.level-badge{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:700;margin-bottom:14px;}
+.lv1-badge{background:rgba(100,116,139,.18);border:1px solid rgba(100,116,139,.35);color:#94a3b8;}
+.lv2-badge{background:rgba(205,127,50,.15);border:1px solid rgba(205,127,50,.4);color:#cd7f32;}
+.lv3-badge{background:rgba(192,192,192,.15);border:1px solid rgba(192,192,192,.35);color:#c0c0c0;}
+.lv4-badge{background:rgba(240,180,41,.15);border:1px solid rgba(240,180,41,.4);color:var(--gold);}
+.lv5-badge{background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.4);color:#60a5fa;}
+.hero-stats{display:flex;gap:16px;}
+.hero-stat .val{font-size:17px;font-weight:700;color:var(--gold);}
+.hero-stat .lbl{font-size:10px;color:var(--muted);}
+.hero-divider{width:1px;background:var(--border);}
+.ref-reward-row{display:flex;align-items:center;gap:8px;background:rgba(0,136,204,.1);border:1px solid rgba(0,136,204,.2);border-radius:10px;padding:8px 12px;margin-top:12px;}
+.ref-reward-row span{font-size:13px;color:var(--ton3);font-weight:700;}
+.ref-reward-row small{font-size:11px;color:var(--muted);}
+
+/* HOME MINING WIDGET */
+.home-mining-widget{display:none;align-items:center;gap:12px;background:linear-gradient(135deg,rgba(0,217,126,.08),rgba(0,136,204,.08));border:1px solid rgba(0,217,126,.2);border-radius:16px;padding:14px 16px;margin:0 16px 14px;position:relative;z-index:10;cursor:pointer;}
+.hmw-icon{font-size:28px;animation:spinSlow 4s linear infinite;}
+@keyframes spinSlow{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}
+.hmw-info{flex:1;}
+.hmw-title{font-size:13px;font-weight:700;color:var(--green);}
+.hmw-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+.hmw-arrow{font-size:18px;color:var(--muted);}
+
+.section{position:relative;z-index:10;margin:0 16px 16px;}
+.section-title{font-size:13px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px;}
+
+.ref-card{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:18px;}
+.ref-label{font-size:12px;color:var(--muted);margin-bottom:8px;}
+.ref-link-box{display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--border);border-radius:12px;padding:10px 14px;margin-bottom:14px;}
+.ref-link-text{flex:1;font-size:12px;color:var(--gold);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:ltr;text-align:left;}
+.copy-btn{background:linear-gradient(135deg,var(--gold),var(--gold3));border:none;border-radius:8px;padding:6px 12px;color:#000;font-family:'Cairo',sans-serif;font-size:12px;font-weight:700;cursor:pointer;transition:all .2s;}
+.copy-btn.copied{background:var(--green);color:#fff;}
+.ref-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.ref-btn{border:none;border-radius:12px;padding:12px 8px;font-family:'Cairo',sans-serif;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .2s;}
+.ref-btn.share{background:linear-gradient(135deg,var(--gold),var(--gold3));color:#000;}
+.ref-btn.invite{background:var(--card2);border:1px solid var(--border);color:var(--gold);}
+
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+.stat-box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 14px;}
+.stat-box .ico{font-size:22px;margin-bottom:6px;}
+.stat-box .val{font-size:20px;font-weight:900;color:var(--gold);}
+.stat-box .lbl{font-size:11px;color:var(--muted);margin-top:2px;}
+
+.withdraw-btn{width:100%;border:none;border-radius:16px;padding:15px;font-family:'Cairo',sans-serif;font-size:15px;font-weight:900;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;background:linear-gradient(135deg,var(--ton),var(--ton2));color:#fff;box-shadow:0 6px 24px rgba(0,136,204,.3);margin-bottom:14px;transition:all .2s;}
+.withdraw-btn svg{width:20px;height:20px;}
+
+/* ══ MINING PAGE ══ */
+.mining-locked{background:var(--card);border:1px solid var(--border);border-radius:24px;padding:28px 20px;text-align:center;margin:0 16px;}
+.lock-icon{font-size:60px;margin-bottom:14px;}
+.lock-title{font-size:20px;font-weight:900;margin-bottom:8px;}
+.lock-desc{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:20px;}
+.refs-progress-wrap{margin-bottom:20px;}
+.refs-progress-bar{height:8px;background:var(--card2);border-radius:10px;overflow:hidden;margin:8px 0;}
+.refs-progress-fill{height:100%;border-radius:10px;background:linear-gradient(90deg,var(--ton2),var(--ton3));transition:width .8s ease;}
+.refs-progress-labels{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);}
+.unlock-hint{font-size:12px;color:var(--ton3);font-weight:700;}
+
+.mining-active-wrap{padding:0 16px;}
+.mining-ring-wrap{display:flex;justify-content:center;margin-bottom:20px;position:relative;}
+.mining-ring-wrap svg{transform:rotate(-90deg);}
+.mining-ring-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;}
+.mining-ring-icon{font-size:36px;animation:spinSlow 3s linear infinite;}
+.mining-ring-label{font-size:10px;color:var(--muted);margin-top:4px;}
+
+.mining-info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+.mining-info-box{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;text-align:center;}
+.mining-info-box .mib-val{font-size:16px;font-weight:900;color:var(--green);}
+.mining-info-box .mib-lbl{font-size:10px;color:var(--muted);margin-top:3px;}
+
+.mining-countdown-box{background:linear-gradient(135deg,rgba(0,217,126,.08),rgba(0,136,204,.06));border:1px solid rgba(0,217,126,.2);border-radius:16px;padding:16px;text-align:center;margin-bottom:16px;}
+.countdown-label{font-size:11px;color:var(--muted);margin-bottom:6px;}
+.countdown-time{font-size:32px;font-weight:900;color:var(--green);font-family:monospace;letter-spacing:3px;}
+.countdown-sub{font-size:10px;color:var(--muted);margin-top:4px;}
+
+.mining-always-on{background:rgba(0,136,204,.06);border:1px solid rgba(0,136,204,.15);border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;}
+.mining-always-on .mao-ico{font-size:20px;}
+.mining-always-on .mao-text{font-size:11px;color:var(--muted);line-height:1.5;}
+.mining-always-on .mao-text strong{color:var(--ton3);}
+
+.start-mining-btn{width:100%;border:none;border-radius:16px;padding:16px;font-family:'Cairo',sans-serif;font-size:16px;font-weight:900;cursor:pointer;background:linear-gradient(135deg,var(--green),#00a86b);color:#000;box-shadow:0 6px 24px rgba(0,217,126,.3);display:flex;align-items:center;justify-content:center;gap:10px;transition:all .2s;margin-bottom:10px;}
+.start-mining-btn:active{transform:scale(.97);}
+.collect-mining-btn{width:100%;border:none;border-radius:16px;padding:16px;font-family:'Cairo',sans-serif;font-size:16px;font-weight:900;cursor:pointer;background:linear-gradient(135deg,var(--gold),var(--gold3));color:#000;box-shadow:0 6px 24px rgba(240,180,41,.3);display:flex;align-items:center;justify-content:center;gap:10px;transition:all .2s;margin-bottom:10px;}
+.collect-mining-btn:active{transform:scale(.97);}
+
+.levels-list{display:flex;flex-direction:column;gap:12px;}
+.level-card{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:18px;position:relative;overflow:hidden;}
+.level-card.current-level{border-color:rgba(240,180,41,.5);background:linear-gradient(135deg,rgba(240,180,41,.06),var(--card));}
+.current-tag{position:absolute;top:12px;left:14px;font-size:9px;color:var(--green);font-weight:700;background:rgba(0,217,126,.12);padding:3px 8px;border-radius:20px;}
+.level-card-top{display:flex;align-items:center;gap:14px;margin-bottom:12px;}
+.level-icon{width:54px;height:54px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:28px;flex-shrink:0;}
+.ico-lv1{background:rgba(100,116,139,.18);}
+.ico-lv2{background:rgba(205,127,50,.18);}
+.ico-lv3{background:rgba(192,192,192,.18);}
+.ico-lv4{background:rgba(240,180,41,.18);}
+.ico-lv5{background:rgba(59,130,246,.18);}
+.level-meta{flex:1;}
+.level-name{font-size:16px;font-weight:900;}
+.level-sub{font-size:11px;color:var(--muted);margin-top:3px;}
+.level-price-tag{text-align:left;}
+.price-ton{font-size:20px;font-weight:900;color:var(--ton3);}
+.price-free{font-size:16px;font-weight:900;color:var(--green);}
+.price-lbl{font-size:9px;color:var(--muted);}
+.level-perks{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+.perk-chip{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:11px;display:flex;align-items:center;gap:4px;}
+.perk-chip .pv{color:var(--ton3);font-weight:700;}
+.level-btn{width:100%;border:none;border-radius:12px;padding:13px;font-family:'Cairo',sans-serif;font-size:14px;font-weight:900;cursor:pointer;transition:all .2s;}
+.btn-buy{background:linear-gradient(135deg,var(--ton),var(--ton2));color:#fff;box-shadow:0 4px 16px rgba(0,136,204,.28);}
+.btn-active{background:rgba(0,217,126,.12);border:1px solid rgba(0,217,126,.3);color:var(--green);cursor:default;}
+
+.friends-list{display:flex;flex-direction:column;gap:8px;}
+.friend-item{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:12px;}
+.friend-avatar{width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,var(--gold3),var(--gold));display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#000;flex-shrink:0;}
+.friend-info{flex:1;}
+.friend-name{font-size:13px;font-weight:700;}
+.friend-date{font-size:10px;color:var(--muted);}
+.friend-earn{font-size:13px;font-weight:700;color:var(--ton3);}
+.empty-state{text-align:center;padding:30px 20px;color:var(--muted);font-size:13px;}
+.empty-state .big{font-size:44px;margin-bottom:10px;}
+
+.leaderboard{display:flex;flex-direction:column;gap:8px;}
+.lb-item{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px 14px;display:flex;align-items:center;gap:12px;}
+.lb-item.top1{border-color:rgba(255,215,0,.45);background:linear-gradient(135deg,rgba(255,215,0,.07),var(--card));}
+.lb-item.top2{border-color:rgba(192,192,192,.35);}
+.lb-item.top3{border-color:rgba(205,127,50,.35);}
+.lb-item.my-row{border-color:rgba(0,136,204,.35);}
+.lb-rank{width:28px;font-size:18px;text-align:center;flex-shrink:0;}
+.lb-avatar{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,var(--gold3),var(--gold));display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#000;flex-shrink:0;}
+.lb-info{flex:1;}
+.lb-name{font-size:13px;font-weight:700;}
+.lb-refs{font-size:10px;color:var(--muted);}
+.lb-score{font-size:14px;font-weight:900;color:var(--ton3);}
+
+.bottom-nav{position:fixed;bottom:0;left:0;right:0;z-index:100;background:rgba(8,12,20,.97);backdrop-filter:blur(20px);border-top:1px solid var(--border);display:flex;padding:8px 0 env(safe-area-inset-bottom,8px);}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 4px;cursor:pointer;border:none;background:transparent;font-family:'Cairo',sans-serif;}
+.nav-icon{font-size:22px;transition:transform .2s;}
+.nav-label{font-size:10px;color:var(--muted);transition:color .2s;}
+.nav-item.active .nav-label{color:var(--gold);}
+.nav-item.active .nav-icon{transform:scale(1.15);}
+
+.page{display:none;}
+.page.active{display:block;}
+
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%) translateY(-80px);padding:10px 24px;border-radius:50px;font-size:13px;font-weight:700;z-index:9999;transition:transform .35s cubic-bezier(.34,1.56,.64,1);white-space:nowrap;pointer-events:none;}
+.toast.show{transform:translateX(-50%) translateY(0);}
+.toast.success{background:var(--green);color:#000;}
+.toast.error{background:var(--red);color:#fff;}
+.toast.ton-toast{background:var(--ton);color:#fff;}
+
+.modal-overlay{position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.75);backdrop-filter:blur(10px);display:flex;align-items:flex-end;justify-content:center;opacity:0;pointer-events:none;transition:opacity .3s;}
+.modal-overlay.open{opacity:1;pointer-events:all;}
+.modal{background:var(--card);border-radius:28px 28px 0 0;padding:28px 20px 44px;width:100%;max-width:480px;transform:translateY(100%);transition:transform .4s cubic-bezier(.34,1.1,.64,1);border-top:1px solid var(--border);}
+.modal-overlay.open .modal{transform:translateY(0);}
+.modal-handle{width:40px;height:4px;background:var(--muted);border-radius:10px;margin:0 auto 22px;opacity:.4;}
+.modal-title{font-size:18px;font-weight:900;text-align:center;margin-bottom:4px;}
+.modal-sub{font-size:12px;color:var(--muted);text-align:center;margin-bottom:20px;}
+.ton-center{display:flex;justify-content:center;margin-bottom:18px;}
+.ton-logo-big{width:66px;height:66px;animation:tonPulse 2s ease-in-out infinite;}
+@keyframes tonPulse{0%,100%{filter:drop-shadow(0 0 10px rgba(0,136,204,.5));}50%{filter:drop-shadow(0 0 22px rgba(0,136,204,.9));}}
+.limit-info{display:flex;gap:8px;margin-bottom:14px;}
+.limit-box{flex:1;background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center;}
+.limit-box .lv{font-size:16px;font-weight:900;}
+.limit-box .ll{font-size:10px;color:var(--muted);margin-top:2px;}
+.limit-box.min-box .lv{color:var(--gold);}
+.limit-box.max-box .lv{color:var(--green);}
+.input-group{margin-bottom:12px;}
+.input-label{font-size:12px;color:var(--muted);margin-bottom:6px;}
+.input-wrap{position:relative;}
+.input-field{width:100%;background:var(--card2);border:1px solid var(--border);border-radius:12px;padding:13px 70px 13px 14px;color:var(--text);font-family:'Cairo',sans-serif;font-size:16px;font-weight:700;outline:none;transition:border .2s;}
+.input-field:focus{border-color:var(--ton);}
+.input-field.invalid{border-color:var(--red);}
+.max-tag{position:absolute;left:12px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--ton3);font-weight:700;cursor:pointer;background:rgba(0,136,204,.12);padding:3px 8px;border-radius:6px;}
+.balance-hint{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:5px;}
+.ton-preview-box{background:linear-gradient(135deg,rgba(0,136,204,.1),rgba(0,136,204,.04));border:1px solid rgba(0,136,204,.22);border-radius:12px;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
+.tpb-label{font-size:12px;color:var(--muted);}
+.tpb-val{font-size:26px;font-weight:900;color:var(--ton3);}
+.tpb-sym{font-size:13px;color:var(--ton);font-weight:700;}
+.wallet-row{background:var(--card2);border:1px solid rgba(0,136,204,.25);border-radius:12px;padding:10px 14px;display:flex;align-items:center;gap:8px;margin-bottom:16px;}
+.wallet-addr{flex:1;font-size:10px;color:var(--ton3);direction:ltr;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.verified-badge{font-size:9px;background:rgba(0,136,204,.15);color:var(--ton3);padding:2px 7px;border-radius:20px;white-space:nowrap;flex-shrink:0;}
+.confirm-btn{width:100%;border:none;border-radius:14px;padding:16px;font-family:'Cairo',sans-serif;font-size:16px;font-weight:900;cursor:pointer;background:linear-gradient(135deg,var(--ton),var(--ton2));color:#fff;transition:all .2s;}
+.confirm-btn:disabled{opacity:.45;cursor:not-allowed;}
+.buy-modal-icon{width:80px;height:80px;border-radius:22px;display:flex;align-items:center;justify-content:center;font-size:42px;margin:0 auto 14px;}
+.buy-modal-name{font-size:20px;font-weight:900;text-align:center;margin-bottom:4px;}
+.buy-modal-price{font-size:34px;font-weight:900;color:var(--ton3);text-align:center;margin-bottom:18px;}
+.buy-perks-list{background:var(--card2);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:18px;}
+.buy-perk-row{display:flex;align-items:center;gap:10px;padding:7px 0;font-size:13px;}
+.buy-perk-row:not(:last-child){border-bottom:1px solid var(--border);}
+.buy-perk-val{color:var(--ton3);font-weight:700;margin-right:auto;}
+
+.ton-anim-overlay{position:fixed;inset:0;z-index:1000;background:rgba(4,8,16,.96);display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .4s;}
+.ton-anim-overlay.show{opacity:1;pointer-events:all;}
+.ton-anim-content{display:flex;flex-direction:column;align-items:center;gap:14px;text-align:center;}
+.orbit-wrap{position:relative;width:190px;height:190px;margin:0 auto;}
+.orbit-center{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);}
+.ton-big-logo{width:82px;height:82px;animation:tonLaunch .8s ease-out forwards;}
+@keyframes tonLaunch{0%{transform:scale(0) rotate(-180deg);opacity:0;}60%{transform:scale(1.2) rotate(8deg);}100%{transform:scale(1) rotate(0);opacity:1;}}
+.orbit-coin{position:absolute;top:50%;left:50%;animation:orbit linear infinite;}
+@keyframes orbit{from{transform:rotate(var(--s)) translateX(78px) rotate(calc(-1*var(--s)));}to{transform:rotate(calc(var(--s) + 360deg)) translateX(78px) rotate(calc(-1*(var(--s)+360deg)));}}
+.anim-title{font-size:22px;font-weight:900;color:var(--ton3);opacity:0;animation:fadeUp .5s .5s forwards;}
+.anim-amount{font-size:36px;font-weight:900;color:#fff;opacity:0;animation:fadeUp .5s .7s forwards;}
+.anim-step{font-size:12px;color:var(--muted);opacity:0;animation:fadeUp .5s .3s forwards;}
+@keyframes fadeUp{from{transform:translateY(18px);opacity:0;}to{transform:translateY(0);opacity:1;}}
+.anim-bar{width:220px;height:4px;background:rgba(255,255,255,.08);border-radius:10px;overflow:hidden;opacity:0;animation:fadeUp .4s .3s forwards;}
+.anim-bar-fill{height:100%;background:linear-gradient(90deg,var(--ton2),var(--ton3));border-radius:10px;animation:barGrow 2.4s .4s ease-out forwards;}
+@keyframes barGrow{from{width:0;}to{width:100%;}}
+.check-circle{width:70px;height:70px;border-radius:50%;background:linear-gradient(135deg,var(--ton),var(--ton2));display:none;align-items:center;justify-content:center;font-size:34px;box-shadow:0 0 40px rgba(0,136,204,.6);animation:popIn .5s forwards;}
+@keyframes popIn{from{transform:scale(0);opacity:0;}60%{transform:scale(1.2);}to{transform:scale(1);opacity:1;}}
+::-webkit-scrollbar{width:0;}
+</style>
+</head>
+<body>
+
+<div id="loader">
+  <svg class="loader-coin" viewBox="0 0 100 100">
+    <defs><radialGradient id="lg" cx="40%" cy="35%" r="60%"><stop offset="0%" stop-color="#ffe066"/><stop offset="100%" stop-color="#b8860b"/></radialGradient></defs>
+    <circle cx="50" cy="50" r="48" fill="#b8860b"/><circle cx="50" cy="50" r="42" fill="url(#lg)"/>
+    <ellipse cx="50" cy="52" rx="20" ry="18" fill="#7a5200" opacity=".85"/><ellipse cx="50" cy="51" rx="19" ry="17" fill="#b8860b"/>
+    <polygon points="33,40 30,25 42,35" fill="#b8860b"/><polygon points="67,40 70,25 58,35" fill="#b8860b"/>
+    <polygon points="34,39 32,28 41,35" fill="#ffe066"/><polygon points="66,39 68,28 59,35" fill="#ffe066"/>
+    <ellipse cx="43" cy="49" rx="4" ry="4.5" fill="#1a0a00"/><ellipse cx="57" cy="49" rx="4" ry="4.5" fill="#1a0a00"/>
+    <circle cx="44.5" cy="47.5" r="1.2" fill="white"/><circle cx="58.5" cy="47.5" r="1.2" fill="white"/>
+    <ellipse cx="50" cy="56" rx="2" ry="1.5" fill="#c0392b"/>
+  </svg>
+  <div class="loader-text">جارٍ التحميل<span class="loader-dots"><span>.</span><span>.</span><span>.</span></span></div>
+</div>
+
+<div id="particles"></div>
+<div class="toast" id="toast"></div>
+
+<header>
+  <div class="logo">
+    <svg class="coin-logo" viewBox="0 0 100 100">
+      <defs><radialGradient id="cg" cx="40%" cy="35%" r="60%"><stop offset="0%" stop-color="#ffe066"/><stop offset="50%" stop-color="#f0b429"/><stop offset="100%" stop-color="#7a5200"/></radialGradient><radialGradient id="rg" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#ffd700"/><stop offset="100%" stop-color="#b8860b"/></radialGradient></defs>
+      <circle cx="50" cy="50" r="48" fill="url(#rg)"/><circle cx="50" cy="50" r="42" fill="url(#cg)"/>
+      <ellipse cx="50" cy="52" rx="20" ry="18" fill="#7a5200" opacity=".85"/><ellipse cx="50" cy="51" rx="19" ry="17" fill="#b8860b"/>
+      <polygon points="33,40 30,25 42,35" fill="#b8860b"/><polygon points="67,40 70,25 58,35" fill="#b8860b"/>
+      <polygon points="34,39 32,28 41,35" fill="#ffe066"/><polygon points="66,39 68,28 59,35" fill="#ffe066"/>
+      <ellipse cx="43" cy="49" rx="4" ry="4.5" fill="#1a0a00"/><ellipse cx="57" cy="49" rx="4" ry="4.5" fill="#1a0a00"/>
+      <circle cx="44.5" cy="47.5" r="1.2" fill="white"/><circle cx="58.5" cy="47.5" r="1.2" fill="white"/>
+      <ellipse cx="50" cy="56" rx="2" ry="1.5" fill="#c0392b"/>
+      <path d="M47,57.5 Q50,60 53,57.5" stroke="#7a5200" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+      <line x1="30" y1="55" x2="44" y2="56" stroke="rgba(255,255,255,.7)" stroke-width=".8"/>
+      <line x1="70" y1="55" x2="56" y2="56" stroke="rgba(255,255,255,.7)" stroke-width=".8"/>
+    </svg>
+    <div class="logo-text"><span class="brand">GOLDCAT</span><span class="tagline">REFERRAL & MINING</span></div>
+  </div>
+  <div class="header-balance" onclick="openWithdraw()">
+    <span id="hdr-ton">0.0000</span><small>TON 💎</small>
+  </div>
+</header>
+
+<!-- ══ HOME ══ -->
+<div class="page active" id="page-home">
+  <div class="hero">
+    <div class="hero-top">
+      <div>
+        <div class="hero-label">أرباحك الكلية</div>
+        <div class="hero-amount"><span id="total-ton">0.0000</span> <small>TON</small></div>
+      </div>
+      <svg class="big-coin" viewBox="0 0 100 100">
+        <defs><radialGradient id="cg2" cx="40%" cy="35%" r="60%"><stop offset="0%" stop-color="#ffe066"/><stop offset="50%" stop-color="#f0b429"/><stop offset="100%" stop-color="#7a5200"/></radialGradient><radialGradient id="rg2" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#ffd700"/><stop offset="100%" stop-color="#b8860b"/></radialGradient></defs>
+        <circle cx="50" cy="50" r="48" fill="url(#rg2)"/><circle cx="50" cy="50" r="42" fill="url(#cg2)"/>
+        <ellipse cx="50" cy="52" rx="20" ry="18" fill="#7a5200" opacity=".85"/><ellipse cx="50" cy="51" rx="19" ry="17" fill="#b8860b"/>
+        <polygon points="33,40 30,25 42,35" fill="#b8860b"/><polygon points="67,40 70,25 58,35" fill="#b8860b"/>
+        <polygon points="34,39 32,28 41,35" fill="#ffe066"/><polygon points="66,39 68,28 59,35" fill="#ffe066"/>
+        <ellipse cx="43" cy="49" rx="4" ry="4.5" fill="#1a0a00"/><ellipse cx="57" cy="49" rx="4" ry="4.5" fill="#1a0a00"/>
+        <circle cx="44.5" cy="47.5" r="1.2" fill="white"/><circle cx="58.5" cy="47.5" r="1.2" fill="white"/>
+        <ellipse cx="50" cy="56" rx="2" ry="1.5" fill="#c0392b"/>
+      </svg>
+    </div>
+    <div id="hero-badge" class="level-badge lv1-badge">⚪ المستوى 1 — مبتدئ</div>
+    <div class="hero-stats">
+      <div class="hero-stat"><div class="val" id="h-refs">0</div><div class="lbl">إجمالي الإحالات</div></div>
+      <div class="hero-divider"></div>
+      <div class="hero-stat"><div class="val" id="h-today">0</div><div class="lbl">إحالات اليوم</div></div>
+      <div class="hero-divider"></div>
+      <div class="hero-stat"><div class="val" id="h-rank">#—</div><div class="lbl">ترتيبك</div></div>
+    </div>
+    <div class="ref-reward-row">
+      <svg width="18" height="18" viewBox="0 0 56 56" fill="none"><circle cx="28" cy="28" r="28" fill="#0088CC"/><path d="M35.238 15H20.762C17.905 15 16.1 18.108 17.56 20.56L26.944 36.968C27.468 37.872 28.532 37.872 29.056 36.968L38.44 20.56C39.9 18.108 38.095 15 35.238 15Z" fill="white"/></svg>
+      <span id="h-reward">0.05 TON</span>
+      <small>مكافأة لكل إحالة</small>
+    </div>
+  </div>
+
+  <!-- MINING WIDGET -->
+  <div class="home-mining-widget" id="home-mining-widget" onclick="switchPage('mining',document.querySelectorAll('.nav-item')[2])">
+    <div class="hmw-icon">⛏️</div>
+    <div class="hmw-info">
+      <div class="hmw-title">التعدين يعمل 24/7</div>
+      <div class="hmw-sub">متراكم: <span id="mining-pending">0.000000 TON</span></div>
+    </div>
+    <div class="hmw-arrow">←</div>
+  </div>
+
+  <div class="section">
+    <button class="withdraw-btn" onclick="openWithdraw()">
+      <svg viewBox="0 0 56 56" fill="none"><circle cx="28" cy="28" r="28" fill="#fff" fill-opacity=".15"/><path d="M35.238 15H20.762C17.905 15 16.1 18.108 17.56 20.56L26.944 36.968C27.468 37.872 28.532 37.872 29.056 36.968L38.44 20.56C39.9 18.108 38.095 15 35.238 15Z" fill="white"/></svg>
+      سحب عبر TON
+      <span style="font-size:11px;opacity:.7;font-weight:600;">حد أدنى: 0.5 TON</span>
+    </button>
+  </div>
+
+  <div class="section">
+    <div class="section-title">رابط الإحالة</div>
+    <div class="ref-card">
+      <div class="ref-label">🐱 5 إحالات = تعدين مجاني 24/7!</div>
+      <div class="ref-link-box">
+        <span>🔗</span>
+        <span class="ref-link-text" id="ref-link-text">جارٍ التحميل...</span>
+        <button class="copy-btn" id="copy-btn" onclick="copyLink()">نسخ</button>
+      </div>
+      <div class="ref-btns">
+        <button class="ref-btn share" onclick="shareLink()">📤 مشاركة</button>
+        <button class="ref-btn invite" onclick="inviteTG()">✉️ دعوة</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">إحصائياتك</div>
+    <div class="stats-grid">
+      <div class="stat-box"><div class="ico">👥</div><div class="val" id="s-refs">0</div><div class="lbl">إجمالي الأصدقاء</div></div>
+      <div class="stat-box"><div class="ico">💰</div><div class="val" id="s-earned">0.0000</div><div class="lbl">TON مكتسبة</div></div>
+      <div class="stat-box"><div class="ico">🏆</div><div class="val" id="s-rank">#—</div><div class="lbl">ترتيبك</div></div>
+      <div class="stat-box"><div class="ico">⚡</div><div class="val" id="s-level">1</div><div class="lbl">مستواك الحالي</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MINING ══ -->
+<div class="page" id="page-mining">
+  <div style="padding:18px 0 0">
+
+    <!-- LOCKED -->
+    <div class="mining-locked" id="mining-locked">
+      <div class="lock-icon">⛏️</div>
+      <div class="lock-title">افتح التعدين!</div>
+      <div class="lock-desc">أحل <strong style="color:var(--gold)">5 أصدقاء</strong> وسيبدأ التعدين تلقائياً<br>يعمل 24 ساعة حتى لو أغلقت التطبيق</div>
+      <div class="refs-progress-wrap">
+        <div class="refs-progress-labels">
+          <span>إحالاتك الحالية</span>
+          <span id="refs-progress-label">0 / 5</span>
+        </div>
+        <div class="refs-progress-bar">
+          <div class="refs-progress-fill" id="refs-progress-fill" style="width:0%"></div>
+        </div>
+      </div>
+      <div class="unlock-hint">⛏️ تحتاج <span id="refs-needed">5</span> إحالات إضافية</div>
+    </div>
+
+    <!-- ACTIVE -->
+    <div class="mining-active-wrap" id="mining-active" style="display:none">
+
+      <!-- RING -->
+      <div class="mining-ring-wrap">
+        <svg width="160" height="160" viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="45" fill="none" stroke="rgba(0,217,126,0.1)" stroke-width="8"/>
+          <circle id="mining-ring-fill" cx="50" cy="50" r="45" fill="none"
+            stroke="url(#mring)" stroke-width="8" stroke-linecap="round"
+            style="stroke-dasharray:282.7;stroke-dashoffset:282.7;transition:stroke-dashoffset 1s linear;"/>
+          <defs><linearGradient id="mring" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#00d97e"/><stop offset="100%" stop-color="#0088cc"/></linearGradient></defs>
+        </svg>
+        <div class="mining-ring-center">
+          <div class="mining-ring-icon">⛏️</div>
+          <div class="mining-ring-label" id="mining-status-text">يعمل ⚡</div>
+        </div>
+      </div>
+
+      <!-- COUNTDOWN -->
+      <div class="mining-countdown-box">
+        <div class="countdown-label">الوقت المتبقي للدورة القادمة</div>
+        <div class="countdown-time" id="mining-countdown">00:00:00</div>
+        <div class="countdown-sub" id="mining-rate-info">0.1 TON / 24 ساعة</div>
+      </div>
+
+      <!-- INFO GRID -->
+      <div class="mining-info-grid">
+        <div class="mining-info-box">
+          <div class="mib-val" id="mining-pending">0.000000</div>
+          <div class="mib-lbl">TON متراكمة</div>
+        </div>
+        <div class="mining-info-box">
+          <div class="mib-val" id="mining-total">0.0000 TON</div>
+          <div class="mib-lbl">إجمالي ما عُدّن</div>
+        </div>
+      </div>
+
+      <!-- ALWAYS ON NOTE -->
+      <div class="mining-always-on">
+        <div class="mao-ico">🔋</div>
+        <div class="mao-text"><strong>التعدين لا يتوقف أبداً</strong><br>يعمل على السيرفر حتى لو أغلقت التطبيق أو الجوال</div>
+      </div>
+
+      <!-- BUTTONS -->
+      <button class="start-mining-btn" id="start-mining-btn" onclick="activateMining()" style="display:none">
+        ⛏️ ابدأ التعدين الآن
+      </button>
+      <button class="collect-mining-btn" id="collect-mining-btn" onclick="collectMined()" style="display:none">
+        💰 جمع المكافآت المتراكمة
+      </button>
+
+    </div>
+  </div>
+</div>
+
+<!-- ══ LEVELS ══ -->
+<div class="page" id="page-levels">
+  <div style="padding:18px 0 0">
+    <div class="section">
+      <div class="section-title">المستويات والأسعار</div>
+      <div class="levels-list" id="levels-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ FRIENDS ══ -->
+<div class="page" id="page-friends">
+  <div style="padding:18px 0 0">
+    <div class="section">
+      <div class="section-title">أصدقاؤك المُحالون</div>
+      <div class="friends-list" id="friends-list">
+        <div class="empty-state"><div class="big">🐱</div><div>جارٍ التحميل...</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ LEADERBOARD ══ -->
+<div class="page" id="page-leaders">
+  <div style="padding:18px 0 0">
+    <div class="section">
+      <div class="section-title">لوحة المتصدرين</div>
+      <div class="leaderboard" id="leaderboard-list">
+        <div class="empty-state"><div class="big">📊</div><div>جارٍ التحميل...</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- NAV -->
+<nav class="bottom-nav">
+  <button class="nav-item active" onclick="switchPage('home',this)"><span class="nav-icon">🏠</span><span class="nav-label">الرئيسية</span></button>
+  <button class="nav-item" onclick="switchPage('mining',this)"><span class="nav-icon">⛏️</span><span class="nav-label">التعدين</span></button>
+  <button class="nav-item" onclick="switchPage('levels',this)"><span class="nav-icon">🚀</span><span class="nav-label">المستويات</span></button>
+  <button class="nav-item" onclick="switchPage('friends',this)"><span class="nav-icon">👥</span><span class="nav-label">أصدقائي</span></button>
+  <button class="nav-item" onclick="switchPage('leaders',this)"><span class="nav-icon">📊</span><span class="nav-label">المتصدرون</span></button>
+</nav>
+
+<!-- WITHDRAW MODAL -->
+<div class="modal-overlay" id="withdraw-modal" onclick="closeModalOutside(event,'withdraw-modal')">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">💎 سحب TON</div>
+    <div class="modal-sub">أرباحك الحقيقية تُرسل لمحفظتك</div>
+    <div class="ton-center">
+      <svg class="ton-logo-big" viewBox="0 0 56 56" fill="none"><circle cx="28" cy="28" r="28" fill="#0088CC"/><path d="M35.238 15H20.762C17.905 15 16.1 18.108 17.56 20.56L26.944 36.968C27.468 37.872 28.532 37.872 29.056 36.968L38.44 20.56C39.9 18.108 38.095 15 35.238 15Z" fill="white"/><path d="M28 15L20.762 15C17.905 15 16.1 18.108 17.56 20.56L22 28.5L28 15Z" fill="#D2E9F5"/></svg>
+    </div>
+    <div class="limit-info">
+      <div class="limit-box min-box"><div class="lv">0.5 TON</div><div class="ll">الحد الأدنى</div></div>
+      <div class="limit-box max-box"><div class="lv">∞</div><div class="ll">لا يوجد حد أقصى</div></div>
+    </div>
+    <div class="input-group">
+      <div class="input-label">كمية السحب (TON)</div>
+      <div class="input-wrap">
+        <input class="input-field" id="ton-amount" type="number" step="0.01" min="0.5" placeholder="0.00" oninput="validateWithdraw()">
+        <span class="max-tag" onclick="setMaxTon()">الكل</span>
+      </div>
+      <div class="balance-hint">
+        <span>الحد الأدنى: 0.5 TON</span>
+        <span>رصيدك: <span id="w-balance" style="color:var(--ton3);font-weight:700;">0.0000</span> TON</span>
+      </div>
+    </div>
+    <div class="ton-preview-box">
+      <div><div class="tpb-label">ستستلم</div><div style="display:flex;align-items:baseline;gap:6px;margin-top:4px;"><span class="tpb-val" id="ton-preview">0.0000</span><span class="tpb-sym">TON</span></div></div>
+      <svg width="38" height="38" viewBox="0 0 56 56" fill="none"><circle cx="28" cy="28" r="28" fill="#0088CC"/><path d="M35.238 15H20.762C17.905 15 16.1 18.108 17.56 20.56L26.944 36.968C27.468 37.872 28.532 37.872 29.056 36.968L38.44 20.56C39.9 18.108 38.095 15 35.238 15Z" fill="white"/><path d="M28 15L20.762 15C17.905 15 16.1 18.108 17.56 20.56L22 28.5L28 15Z" fill="#D2E9F5"/></svg>
+    </div>
+    <div class="wallet-row">
+      <svg width="18" height="18" viewBox="0 0 56 56" fill="none"><circle cx="28" cy="28" r="28" fill="#0088CC"/><path d="M35.238 15H20.762C17.905 15 16.1 18.108 17.56 20.56L26.944 36.968C27.468 37.872 28.532 37.872 29.056 36.968L38.44 20.56C39.9 18.108 38.095 15 35.238 15Z" fill="white"/><path d="M28 15L20.762 15C17.905 15 16.1 18.108 17.56 20.56L22 28.5L28 15Z" fill="#D2E9F5"/></svg>
+      <span class="wallet-addr">UQBufh6lLHE5H1NDJXQwRIVCX-t4iKHyyoXD0Spm8N9navPx</span>
+      <span class="verified-badge">✓ موثّق</span>
+    </div>
+    <button class="confirm-btn" id="confirm-withdraw-btn" onclick="confirmWithdraw()" disabled>تأكيد السحب</button>
+  </div>
+</div>
+
+<!-- BUY LEVEL MODAL -->
+<div class="modal-overlay" id="buy-modal" onclick="closeModalOutside(event,'buy-modal')">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div id="bm-icon" class="buy-modal-icon ico-lv2">🥉</div>
+    <div class="buy-modal-name" id="bm-name"></div>
+    <div class="buy-modal-price" id="bm-price"></div>
+    <div class="buy-perks-list" id="bm-perks"></div>
+    <div class="wallet-row">
+      <svg width="18" height="18" viewBox="0 0 56 56" fill="none"><circle cx="28" cy="28" r="28" fill="#0088CC"/><path d="M35.238 15H20.762C17.905 15 16.1 18.108 17.56 20.56L26.944 36.968C27.468 37.872 28.532 37.872 29.056 36.968L38.44 20.56C39.9 18.108 38.095 15 35.238 15Z" fill="white"/><path d="M28 15L20.762 15C17.905 15 16.1 18.108 17.56 20.56L22 28.5L28 15Z" fill="#D2E9F5"/></svg>
+      <span class="wallet-addr">UQBufh6lLHE5H1NDJXQwRIVCX-t4iKHyyoXD0Spm8N9navPx</span>
+      <span class="verified-badge">✓ موثّق</span>
+    </div>
+    <button class="confirm-btn" onclick="confirmBuyLevel()">دفع وترقية المستوى 🚀</button>
+  </div>
+</div>
+
+<!-- TON ANIMATION -->
+<div class="ton-anim-overlay" id="ton-anim">
+  <div class="ton-anim-content">
+    <div class="orbit-wrap">
+      <div class="orbit-center">
+        <svg class="ton-big-logo" width="82" height="82" viewBox="0 0 56 56" fill="none">
+          <circle cx="28" cy="28" r="28" fill="#0088CC"/>
+          <path d="M35.238 15H20.762C17.905 15 16.1 18.108 17.56 20.56L26.944 36.968C27.468 37.872 28.532 37.872 29.056 36.968L38.44 20.56C39.9 18.108 38.095 15 35.238 15Z" fill="white"/>
+          <path d="M28 15L20.762 15C17.905 15 16.1 18.108 17.56 20.56L22 28.5L28 15Z" fill="#D2E9F5"/>
+        </svg>
+      </div>
+      <svg class="orbit-coin" style="--s:0deg;animation-duration:1.8s;" width="22" height="22" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="#b8860b"/><circle cx="50" cy="50" r="42" fill="#f0b429"/><text x="50" y="58" text-anchor="middle" font-size="30" fill="#000" font-weight="900">G</text></svg>
+      <svg class="orbit-coin" style="--s:120deg;animation-duration:1.8s;" width="18" height="18" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="#b8860b"/><circle cx="50" cy="50" r="42" fill="#f0b429"/><text x="50" y="58" text-anchor="middle" font-size="30" fill="#000" font-weight="900">G</text></svg>
+      <svg class="orbit-coin" style="--s:240deg;animation-duration:1.8s;" width="16" height="16" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="#b8860b"/><circle cx="50" cy="50" r="42" fill="#f0b429"/><text x="50" y="58" text-anchor="middle" font-size="30" fill="#000" font-weight="900">G</text></svg>
+    </div>
+    <div class="anim-title" id="anim-title">جارٍ الإرسال...</div>
+    <div class="anim-amount" id="anim-amount">0 TON</div>
+    <div class="anim-step" id="anim-step">جارٍ التحقق...</div>
+    <div class="anim-bar"><div class="anim-bar-fill"></div></div>
+    <div class="check-circle" id="check-circle">✓</div>
+  </div>
+</div>
+
+</body>
+</html>
