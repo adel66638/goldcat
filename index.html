@@ -5,15 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>GOLDCAT</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script>
-// TON Connect - load after page ready
-window.addEventListener('load', function() {
-  if(typeof TonConnectUI !== 'undefined') {
-    window._tcReady = true;
-  }
-});
-</script>
-<script src="https://unpkg.com/@tonconnect/ui@2.0.2/dist/tonconnect-ui.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
 
 <script type="module">
@@ -73,75 +64,51 @@ function generateUserCode() {
   return Math.floor(100000 + Math.random() * 900000);
 }
 
-// ── TON CONNECT ──
-let tonConnectUI = null;
-let connectedWallet = null;
-
-function initTonConnect() {
-  try {
-    // Try different possible class names from the SDK
-    const TCUI = window.TonConnectUI || window.TONConnectUI?.TonConnectUI || window.TONConnectUI;
-    if (!TCUI) {
-      console.warn('TON Connect SDK not loaded yet, retrying...');
-      setTimeout(initTonConnect, 1000);
-      return;
-    }
-    tonConnectUI = new TCUI({
-      manifestUrl: 'https://adel66638.github.io/goldcat/tonconnect-manifest.json',
-    });
-    tonConnectUI.onStatusChange(async (wallet) => {
-      connectedWallet = wallet;
-      if (wallet) {
-        // Convert raw address to user-friendly format
-        const addr = wallet.account.address;
-        const userRef = doc(db,'users',userId);
-        await updateDoc(userRef, { walletAddress: addr });
-        state.walletAddress = addr;
-        renderWalletBtn();
-        showToast('✅ Wallet connected!','ton-toast');
-      } else {
-        state.walletAddress = null;
-        renderWalletBtn();
-      }
-    });
-  } catch(e) {
-    console.error('TON Connect init error:', e);
-    // Retry after 1 second if SDK not ready
-    setTimeout(initTonConnect, 1000);
-  }
-}
-
+// ── WALLET ──
 function renderWalletBtn() {
   const btn = document.getElementById('connect-wallet-btn');
-  const addr = state.walletAddress;
   if (!btn) return;
-  if (addr) {
-    const short = addr.slice(0,6) + '…' + addr.slice(-4);
+  if (state.walletAddress) {
+    const short = state.walletAddress.slice(0,8) + '…' + state.walletAddress.slice(-4);
     btn.textContent = '💎 ' + short;
     btn.classList.add('connected');
   } else {
-    btn.textContent = '🔗 Connect TON Wallet';
+    btn.textContent = '🔗 ربط محفظة TON';
     btn.classList.remove('connected');
   }
 }
 
-window.connectWallet = async function() {
-  if (!tonConnectUI) {
-    showToast('⏳ Please wait...', 'ton-toast');
-    setTimeout(initTonConnect, 500);
-    return;
+window.connectWallet = function() {
+  document.getElementById('wallet-modal').classList.add('open');
+  const inp = document.getElementById('wallet-input');
+  if(inp) inp.value = state.walletAddress || '';
+};
+
+window.saveWallet = async function() {
+  const addr = (document.getElementById('wallet-input').value || '').trim();
+  if (!addr) { showToast('❌ Enter wallet address', 'error'); return; }
+  if (!addr.startsWith('UQ') && !addr.startsWith('EQ') && !addr.startsWith('0:')) {
+    showToast('❌ Invalid TON address', 'error'); return;
   }
   try {
-    if (connectedWallet) {
-      await tonConnectUI.disconnect();
-      showToast('Wallet disconnected');
-    } else {
-      await tonConnectUI.openModal();
-    }
-  } catch(e) {
-    console.error(e);
-    showToast('❌ Could not open wallet', 'error');
-  }
+    const userRef = doc(db,'users',userId);
+    await updateDoc(userRef, { walletAddress: addr });
+    state.walletAddress = addr;
+    renderWalletBtn();
+    document.getElementById('wallet-modal').classList.remove('open');
+    showToast('✅ Wallet saved!', 'ton-toast');
+  } catch(e) { showToast('❌ Failed to save', 'error'); }
+};
+
+window.removeWallet = async function() {
+  try {
+    const userRef = doc(db,'users',userId);
+    await updateDoc(userRef, { walletAddress: null });
+    state.walletAddress = null;
+    renderWalletBtn();
+    document.getElementById('wallet-modal').classList.remove('open');
+    showToast('Wallet removed');
+  } catch(e) {}
 };
 
 // ── STATE ──
@@ -200,7 +167,6 @@ async function loadUser(){
     renderAll();
     renderWalletBtn();
     if(state.miningActive) startMiningCountdown();
-    initTonConnect();
   } catch(e){
     console.error(e);
     showToast('❌ Connection error','error');
@@ -1211,6 +1177,24 @@ header{position:relative;z-index:10;padding:18px 20px 0;display:flex;align-items
       <span class="verified-badge">✓ Verified</span>
     </div>
     <button class="confirm-btn" onclick="confirmBuyLevel()">Pay & Upgrade Level 🚀</button>
+  </div>
+</div>
+
+<!-- WALLET MODAL -->
+<div class="modal-overlay" id="wallet-modal" onclick="closeModalOutside(event,'wallet-modal')">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🔗 ربط محفظة TON</div>
+    <div class="modal-sub">أدخل عنوان محفظتك لاستقبال المدفوعات</div>
+    <div class="input-group">
+      <div class="input-label">عنوان المحفظة (TON)</div>
+      <input class="input-field" id="wallet-input" type="text" placeholder="UQA..." style="direction:ltr;text-align:left;font-size:13px;">
+      <div class="balance-hint">
+        <span style="color:var(--muted)">يبدأ بـ UQ أو EQ</span>
+      </div>
+    </div>
+    <button class="confirm-btn" onclick="saveWallet()" style="margin-bottom:10px;">💾 حفظ المحفظة</button>
+    ${`<button onclick="removeWallet()" style="width:100%;border:none;border-radius:14px;padding:14px;font-family:'Inter',sans-serif;font-size:14px;font-weight:700;cursor:pointer;background:rgba(255,77,109,.1);color:var(--red);border:1px solid rgba(255,77,109,.2);">🗑️ حذف المحفظة</button>`}
   </div>
 </div>
 
