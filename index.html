@@ -59,10 +59,17 @@ const LEVELS = [
   { id:5, name:'Diamond',   icon:'💎', iconClass:'ico-lv5', badgeClass:'lv5-badge', price:4, reward:0.25, color:'#60a5fa' },
 ];
 
+// ── GENERATE UNIQUE USER CODE ──
+function generateUserCode() {
+  // 6-digit random number: e.g. #482910
+  return Math.floor(100000 + Math.random() * 900000);
+}
+
 // ── STATE ──
 let state = {
   level:1, balance:0, totalRefs:0, todayRefs:0, rank:0,
   miningActive:false, miningStartTime:null, minedPending:0,
+  userCode: null,
   friends:[], leaderboard:[], pendingBuyLevel:null,
 };
 let miningTimer = null;
@@ -80,6 +87,7 @@ async function loadUser(){
         totalRefs:0, todayRefs:0,
         miningActive:false, miningStartTime:null, minedTotal:0,
         referredBy: startParam||null,
+        userCode: generateUserCode(),
         createdAt: serverTimestamp(),
       };
       await setDoc(userRef, newUser);
@@ -94,6 +102,12 @@ async function loadUser(){
       state.miningActive = d.miningActive || false;
       state.miningStartTime = d.miningStartTime?.toMillis?.() || d.miningStartTime || null;
       state.minedTotal   = d.minedTotal   || 0;
+      state.userCode     = d.userCode     || null;
+      // assign code if old user doesn't have one yet
+      if(!state.userCode){
+        state.userCode = generateUserCode();
+        await updateDoc(userRef, { userCode: state.userCode });
+      }
     }
 
     if(state.miningActive && state.miningStartTime){
@@ -284,6 +298,9 @@ function renderHome(){
   setEl('h-reward',    lv.reward.toFixed(2)+' TON');
   setEl('w-balance',   state.balance.toFixed(4));
   setEl('ref-link-text',`https://t.me/GOLDCATBot/app?startapp=${userId}`);
+  // show user code
+  const codeEl = document.getElementById('user-code-display');
+  if(codeEl && state.userCode) codeEl.textContent = '#' + state.userCode;
   const badge = document.getElementById('hero-badge');
   if(badge){ badge.className='level-badge '+lv.badgeClass; badge.textContent=lv.icon+' Level '+lv.id+' — '+lv.name; }
 
@@ -837,8 +854,11 @@ header{position:relative;z-index:10;padding:18px 20px 0;display:flex;align-items
     </svg>
     <div class="logo-text"><span class="brand">GOLDCAT</span><span class="tagline">REFERRAL & MINING</span></div>
   </div>
-  <div class="header-balance" onclick="openWithdraw()">
-    <span id="hdr-ton">0.0000</span><small>TON 💎</small>
+  <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;">
+    <div class="header-balance" onclick="openWithdraw()">
+      <span id="hdr-ton">0.0000</span><small>TON 💎</small>
+    </div>
+    <div id="user-code-display" style="font-size:10px;color:var(--muted);font-weight:700;letter-spacing:1px;">#------</div>
   </div>
 </header>
 
