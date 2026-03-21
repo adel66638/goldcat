@@ -5,7 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>GOLDCAT</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script src="https://unpkg.com/@tonconnect/ui@latest/dist/tonconnect-ui.min.js"></script>
+<script>
+// TON Connect - load after page ready
+window.addEventListener('load', function() {
+  if(typeof TonConnectUI !== 'undefined') {
+    window._tcReady = true;
+  }
+});
+</script>
+<script src="https://unpkg.com/@tonconnect/ui@2.0.2/dist/tonconnect-ui.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
 
 <script type="module">
@@ -71,15 +79,21 @@ let connectedWallet = null;
 
 function initTonConnect() {
   try {
-    tonConnectUI = new TONConnectUI.TonConnectUI({
+    // Try different possible class names from the SDK
+    const TCUI = window.TonConnectUI || window.TONConnectUI?.TonConnectUI || window.TONConnectUI;
+    if (!TCUI) {
+      console.warn('TON Connect SDK not loaded yet, retrying...');
+      setTimeout(initTonConnect, 1000);
+      return;
+    }
+    tonConnectUI = new TCUI({
       manifestUrl: 'https://adel66638.github.io/goldcat/tonconnect-manifest.json',
-      buttonRootId: null,
     });
     tonConnectUI.onStatusChange(async (wallet) => {
       connectedWallet = wallet;
       if (wallet) {
+        // Convert raw address to user-friendly format
         const addr = wallet.account.address;
-        // Save wallet address to Firebase
         const userRef = doc(db,'users',userId);
         await updateDoc(userRef, { walletAddress: addr });
         state.walletAddress = addr;
@@ -90,7 +104,11 @@ function initTonConnect() {
         renderWalletBtn();
       }
     });
-  } catch(e) { console.error('TON Connect init error:', e); }
+  } catch(e) {
+    console.error('TON Connect init error:', e);
+    // Retry after 1 second if SDK not ready
+    setTimeout(initTonConnect, 1000);
+  }
 }
 
 function renderWalletBtn() {
@@ -98,7 +116,8 @@ function renderWalletBtn() {
   const addr = state.walletAddress;
   if (!btn) return;
   if (addr) {
-    btn.textContent = '💎 ' + addr.slice(0,6) + '…' + addr.slice(-4);
+    const short = addr.slice(0,6) + '…' + addr.slice(-4);
+    btn.textContent = '💎 ' + short;
     btn.classList.add('connected');
   } else {
     btn.textContent = '🔗 Connect TON Wallet';
@@ -107,12 +126,21 @@ function renderWalletBtn() {
 }
 
 window.connectWallet = async function() {
-  if (!tonConnectUI) return;
-  if (connectedWallet) {
-    await tonConnectUI.disconnect();
-    showToast('Wallet disconnected');
-  } else {
-    await tonConnectUI.openModal();
+  if (!tonConnectUI) {
+    showToast('⏳ Please wait...', 'ton-toast');
+    setTimeout(initTonConnect, 500);
+    return;
+  }
+  try {
+    if (connectedWallet) {
+      await tonConnectUI.disconnect();
+      showToast('Wallet disconnected');
+    } else {
+      await tonConnectUI.openModal();
+    }
+  } catch(e) {
+    console.error(e);
+    showToast('❌ Could not open wallet', 'error');
   }
 };
 
