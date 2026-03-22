@@ -245,6 +245,14 @@ async function activateMining(){
   } catch(e){ showToast('❌ Failed to activate mining','error'); }
 }
 
+// ── HOME COLLECT ──
+window.homeCollect = async function(){
+  await claimMinedTON();
+  renderHome();
+  renderMiningPage();
+  showToast("✅ تم جمع التعدين!");
+};
+
 // ── COLLECT MINED ──
 async function collectMined(){
   await claimMinedTON();
@@ -360,6 +368,8 @@ function renderHome(){
   if(mw){
     if(state.miningActive){
       mw.style.display='flex';
+      const hcb = document.getElementById('home-collect-btn');
+      if(hcb) hcb.style.display='flex';
     } else if(state.totalRefs >= MINING_REFS){
       mw.style.display='flex';
     } else {
@@ -972,6 +982,7 @@ header{position:relative;z-index:10;padding:18px 20px 0;display:flex;align-items
     </div>
     <div class="hmw-arrow">→</div>
   </div>
+  <button id="home-collect-btn" onclick="homeCollect()" style="display:none;width:100%;margin:8px 0 14px 0;background:linear-gradient(135deg,#00d97e,#0088cc);color:#fff;font-weight:900;font-size:15px;border:none;border-radius:16px;padding:14px;cursor:pointer;align-items:center;justify-content:center;gap:8px;box-shadow:0 0 20px rgba(0,217,126,0.3);">💰 جمع التعدين وإضافته للرصيد</button>
 
   <!-- ══ PROMO BANNER ══ -->
   <div class="promo-banner" onclick="openInfoModal()" style="
