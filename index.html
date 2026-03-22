@@ -43,7 +43,8 @@ const tgUser     = tg?.initDataUnsafe?.user;
 // Use Telegram ID if available, otherwise use persistent device ID
 const userId     = tgUser ? String(tgUser.id) : getDeviceId();
 const userName   = tgUser?.first_name || 'User';
-const startParam = tg?.initDataUnsafe?.start_param || '';
+const _urlParams = new URLSearchParams(window.location.search);
+const startParam = tg?.initDataUnsafe?.start_param || _urlParams.get('start') || _urlParams.get('startapp') || '';
 
 // ── CONSTANTS ──
 const WALLET       = 'UQBufh6lLHE5H1NDJXQwRIVCX-t4iKHyyoXD0Spm8N9navPx';
